@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Głupkowaty Kotek — Skoczek</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at top, #3546a8 0%, #171b46 45%, #090b1e 100%);
+      font-family: Arial, sans-serif;
+      color: white;
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    #root {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+    }
+
+    .game-shell {
+      position: relative;
+      width: min(100vw, 430px);
+      height: min(100vh, 760px);
+      padding: 8px;
+    }
+
+    .game-card {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border: 2px solid rgba(255,255,255,.18);
+      border-radius: 26px;
+      box-shadow: 0 24px 70px rgba(0,0,0,.45);
+      background: #11152e;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(10, 12, 35, .64);
+      border: 1px solid rgba(255,255,255,.16);
+      font-size: 14px;
+      font-weight: bold;
+      text-shadow: 0 2px 5px #000;
+    }
+
+    .mobile-controls {
+      position: absolute;
+      bottom: 18px;
+      left: 18px;
+      right: 18px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .ctrl {
+      pointer-events: auto;
+      width: 72px;
+      height: 72px;
+      border: 0;
+      border-radius: 50%;
+      color: white;
+      font-size: 28px;
+      font-weight: 900;
+      background: rgba(15,18,50,.65);
+      border: 1px solid rgba(255,255,255,.22);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .ctrl:active {
+      transform: scale(.94);
+      background: rgba(91,105,255,.72);
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: rgba(5,7,24,.58);
+      padding: 24px;
+    }
+
+    .panel {
+      width: min(330px, 92%);
+      padding: 28px 22px;
+      border-radius: 24px;
+      background: rgba(17,21,54,.96);
+      border: 1px solid rgba(255,255,255,.15);
+      text-align: center;
+    }
+
+    .panel h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    .panel p {
+      margin: 8px 0 18px;
+      opacity: .85;
+      line-height: 1.45;
+    }
+
+    .start-btn {
+      border: 0;
+      border-radius: 14px;
+      padding: 13px 22px;
+      background: #ffcc4d;
+      color: #251b00;
+      font-size: 16px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 8px 0 #bb8320;
+    }
+
+    .start-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 4px 0 #bb8320;
+    }
+
+    .tiny {
+      margin-top: 14px !important;
+      font-size: 12px;
+      opacity: .6 !important;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <script>
+    const { useEffect, useRef, useState } = React;
+
+    const W = 420;
+    const H = 720;
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function random(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function h(type, props, ...children) {
+      return React.createElement(type, props, ...children);
+    }
+
+    function Game() {
+      const canvasRef = useRef(null);
+      const requestRef = useRef(null);
+      const inputRef = useRef({ left: false, right: false });
+      const gameRef = useRef(null);
+      const statusRef = useRef("start");
+
+      const [status, setStatus] = useState("start");
+      const [score, setScore] = useState(0);
+      const [best, setBest] = useState(
+        Number(localStorage.getItem("glupkowaty-kotek-best") || 0)
+      );
+
+      function setGameStatus(value) {
+        statusRef.current = value;
+        setStatus(value);
+      }
+
+      function makePlatform(y, x = random(15, W - 105), width = random(75, 115)) {
+        return {
+          x,
+          y,
+          w: width,
+          h: 15,
+          wobble: Math.random() < 0.18,
+          wobblePhase: random(0, Math.PI * 2)
+        };
+      }
+
+      function createWorld() {
+        const platforms = [];
+        platforms.push(makePlatform(H - 55, W / 2 - 55, 110));
+
+        let y = H - 145;
+        while (y > -120) {
+          platforms.push(makePlatform(y));
+          y -= random(78, 110);
+        }
+
+        return {
+          player: {
+            x: W / 2 - 22,
+            y: H - 110,
+            w: 44,
+            h: 48,
+            vx: 0,
+            vy: -10.5,
+            facing: 1,
+            squash: 0
+          },
+          platforms,
+          score: 0,
+          alive: true,
+          t: 0,
+          particles: [],
+          stars: Array.from({ length: 38 }, () => ({
+            x: random(0, W),
+            y: random(0, H),
+            r: random(.8, 2.2),
+            tw: random(0, Math.PI * 2)
+          }))
+        };
+      }
+
+      function startGame() {
+        gameRef.current = createWorld();
+        inputRef.current.left = false;
+        inputRef.current.right = false;
+        setScore(0);
+        setGameStatus("playing");
+      }
+
+      function addBounceParticles(g, x, y) {
+        for (let i = 0; i < 9; i++) {
+          g.particles.push({
+            x,
+            y,
+            vx: random(-2.5, 2.5),
+            vy: random(-3.8, -1),
+            life: 1,
+            size: random(2, 5)
+          });
+        }
+      }
+
+      function updateGame() {
+        const g = gameRef.current;
+        if (!g || !g.alive || statusRef.current !== "playing") return;
+
+        const p = g.player;
+        g.t += 1;
+
+        const accel = 0.62;
+
+        if (inputRef.current.left) {
+          p.vx -= accel;
+          p.facing = -1;
+        }
+
+        if (inputRef.current.right) {
+          p.vx += accel;
+          p.facing = 1;
+        }
+
+        p.vx *= 0.89;
+        p.vx = clamp(p.vx, -6.2, 6.2);
+
+        const prevBottom = p.y + p.h;
+
+        p.vy += 0.42;
+        p.vy = Math.min(p.vy, 13);
+
+        p.x += p.vx;
+        p.y += p.vy;
+
+        if (p.x > W + 8) p.x = -p.w + 8;
+        if (p.x + p.w < -8) p.x = W - 8;
+
+        g.platforms.forEach(pl => {
+          if (pl.wobble) {
+            pl.x += Math.sin(g.t * .025 + pl.wobblePhase) * .18;
+            pl.x = clamp(pl.x, 5, W - pl.w - 5);
+          }
+        });
+
+        if (p.vy > 0) {
+          for (const pl of g.platforms) {
+            const newBottom = p.y + p.h;
+
+            const crossedTop =
+              prevBottom <= pl.y + 4 &&
+              newBottom >= pl.y;
+
+            const horizontallyInside =
+              p.x + p.w * .78 > pl.x &&
+              p.x + p.w * .22 < pl.x + pl.w;
+
+            if (crossedTop && horizontallyInside) {
+              p.y = pl.y - p.h;
+              p.vy = -11.8;
+              p.squash = 1;
+              addBounceParticles(g, p.x + p.w / 2, pl.y);
+              break;
+            }
+          }
+        }
+
+        p.squash *= .82;
+
+        const scrollLine = H * .38;
+
+        if (p.y < scrollLine && p.vy < 0) {
+          const shift = scrollLine - p.y;
+          p.y = scrollLine;
+
+          g.platforms.forEach(pl => {
+            pl.y += shift;
+          });
+
+          g.score += shift * .12;
+        }
+
+        g.platforms = g.platforms.filter(pl => pl.y < H + 60);
+
+        let highestY = Math.min(...g.platforms.map(pl => pl.y));
+
+        while (highestY > -100) {
+          highestY -= random(78, 110);
+          g.platforms.push(makePlatform(highestY));
+        }
+
+        g.particles.forEach(pt => {
+          pt.x += pt.vx;
+          pt.y += pt.vy;
+          pt.vy += .12;
+          pt.life -= .045;
+        });
+
+        g.particles = g.particles.filter(pt => pt.life > 0);
+
+        const roundedScore = Math.floor(g.score);
+        setScore(roundedScore);
+
+        if (p.y > H + 90) {
+          g.alive = false;
+
+          const finalScore = Math.floor(g.score);
+          const newBest = Math.max(
+            Number(localStorage.getItem("glupkowaty-kotek-best") || 0),
+            finalScore
+          );
+
+          setScore(finalScore);
+          setBest(newBest);
+          localStorage.setItem("glupkowaty-kotek-best", String(newBest));
+          setGameStatus("gameover");
+        }
+      }
+
+      function roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(x, y, w, h, r);
+        } else {
+          const rr = Math.min(r, w / 2, h / 2);
+          ctx.moveTo(x + rr, y);
+          ctx.arcTo(x + w, y, x + w, y + h, rr);
+          ctx.arcTo(x + w, y + h, x, y + h, rr);
+          ctx.arcTo(x, y + h, x, y, rr);
+          ctx.arcTo(x, y, x + w, y, rr);
+        }
+      }
+
+      function drawCat(ctx, p, t) {
+        ctx.save();
+
+        const bob = Math.sin(t * .12) * 1.2;
+        const squashY = 1 - p.squash * .16;
+        const stretchX = 1 + p.squash * .12;
+
+        ctx.translate(p.x + p.w / 2, p.y + p.h / 2 + bob);
+        ctx.scale(p.facing * stretchX, squashY);
+
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "#f0a64c";
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.moveTo(-18, 8);
+        ctx.quadraticCurveTo(-38, 4, -31, -12);
+        ctx.stroke();
+
+        ctx.fillStyle = "#f4b457";
+        roundRect(ctx, -19, -13, 38, 37, 13);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(-17, -12);
+        ctx.lineTo(-13, -29);
+        ctx.lineTo(-3, -15);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(7, -15);
+        ctx.lineTo(15, -29);
+        ctx.lineTo(18, -10);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#ff8c9e";
+        ctx.beginPath();
+        ctx.moveTo(-13, -15);
+        ctx.lineTo(-11, -24);
+        ctx.lineTo(-6, -16);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(10, -16);
+        ctx.lineTo(14, -24);
+        ctx.lineTo(15, -14);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#ffd083";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 18, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.ellipse(-7, -5, 5.5, 6.5, -.15, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(7, -4, 6.2, 5.4, .18, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#26263c";
+        ctx.beginPath();
+        ctx.arc(-6, -3.5, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(9, -5.5, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#d65a76";
+        ctx.beginPath();
+        ctx.moveTo(-3, 2);
+        ctx.lineTo(3, 2);
+        ctx.lineTo(0, 6);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.strokeStyle = "#48313d";
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(0, 6);
+        ctx.quadraticCurveTo(1, 10, 5, 9);
+        ctx.stroke();
+
+        ctx.fillStyle = "#ff6f91";
+        ctx.beginPath();
+        ctx.ellipse(6.2, 10.5, 3.4, 5.3, -.35, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255,255,255,.8)";
+        ctx.lineWidth = 1.4;
+
+        [
+          [-10,4,-25,1], [-10,7,-26,8],
+          [10,4,25,0], [10,7,26,9]
+        ].forEach(([x1,y1,x2,y2]) => {
+          ctx.beginPath();
+          ctx.moveTo(x1,y1);
+          ctx.lineTo(x2,y2);
+          ctx.stroke();
+        });
+
+        ctx.fillStyle = "#ffd083";
+        ctx.beginPath();
+        ctx.ellipse(-11, 21, 8, 5, -.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(11, 21, 8, 5, .1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawGame() {
+        const canvas = canvasRef.current;
+        const g = gameRef.current;
+
+        if (!canvas || !g) return;
+
+        const ctx = canvas.getContext("2d");
+
+        ctx.clearRect(0, 0, W, H);
+
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#252b69");
+        grad.addColorStop(.5, "#151a45");
+        grad.addColorStop(1, "#0a0d27");
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        for (const s of g.stars) {
+          const a = .35 + (Math.sin(g.t * .03 + s.tw) + 1) * .22;
+          ctx.globalAlpha = a;
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+
+        for (let i = 0; i < 5; i++) {
+          const yy = ((i * 170 + g.score * 1.7) % (H + 150)) - 90;
+          const xx = 25 + ((i * 89) % 250);
+
+          ctx.globalAlpha = .07;
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.ellipse(xx, yy, 55, 16, 0, 0, Math.PI * 2);
+          ctx.ellipse(xx + 38, yy - 7, 38, 18, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+
+        for (const pl of g.platforms) {
+          ctx.fillStyle = "rgba(0,0,0,.25)";
+          roundRect(ctx, pl.x + 3, pl.y + 7, pl.w, pl.h, 8);
+          ctx.fill();
+
+          const pg = ctx.createLinearGradient(pl.x, pl.y, pl.x, pl.y + pl.h);
+          pg.addColorStop(0, pl.wobble ? "#9af3ff" : "#7cf0b1");
+          pg.addColorStop(1, pl.wobble ? "#4fb3dd" : "#38a970");
+
+          ctx.fillStyle = pg;
+          roundRect(ctx, pl.x, pl.y, pl.w, pl.h, 8);
+          ctx.fill();
+
+          ctx.fillStyle = "rgba(255,255,255,.42)";
+          roundRect(ctx, pl.x + 8, pl.y + 3, Math.max(15, pl.w * .34), 3, 2);
+          ctx.fill();
+        }
+
+        for (const pt of g.particles) {
+          ctx.globalAlpha = Math.max(0, pt.life);
+          ctx.fillStyle = "#ffe178";
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, pt.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+        drawCat(ctx, g.player, g.t);
+      }
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        canvas.width = W;
+        canvas.height = H;
+
+        gameRef.current = createWorld();
+
+        function onKeyDown(e) {
+          if (["ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Space", "Enter"].includes(e.code)) {
+            e.preventDefault();
+          }
+
+          if (e.code === "ArrowLeft" || e.code === "KeyA") {
+            inputRef.current.left = true;
+          }
+
+          if (e.code === "ArrowRight" || e.code === "KeyD") {
+            inputRef.current.right = true;
+          }
+
+          if (
+            (e.code === "Space" || e.code === "Enter") &&
+            statusRef.current !== "playing"
+          ) {
+            startGame();
+          }
+        }
+
+        function onKeyUp(e) {
+          if (e.code === "ArrowLeft" || e.code === "KeyA") {
+            inputRef.current.left = false;
+          }
+
+          if (e.code === "ArrowRight" || e.code === "KeyD") {
+            inputRef.current.right = false;
+          }
+        }
+
+        window.addEventListener("keydown", onKeyDown, { passive: false });
+        window.addEventListener("keyup", onKeyUp);
+
+        let previous = performance.now();
+
+        function loop(now) {
+          const delta = Math.min(32, now - previous);
+          previous = now;
+
+          const steps = Math.max(1, Math.min(2, Math.round(delta / 16.67)));
+
+          for (let i = 0; i < steps; i++) {
+            updateGame();
+          }
+
+          drawGame();
+          requestRef.current = requestAnimationFrame(loop);
+        }
+
+        requestRef.current = requestAnimationFrame(loop);
+
+        return () => {
+          cancelAnimationFrame(requestRef.current);
+          window.removeEventListener("keydown", onKeyDown);
+          window.removeEventListener("keyup", onKeyUp);
+        };
+      }, []);
+
+      function setPress(dir, value) {
+        inputRef.current[dir] = value;
+      }
+
+      const overlay =
+        status === "start"
+          ? h("div", { className: "overlay" },
+              h("div", { className: "panel" },
+                h("h1", null, "🐱 Głupkowaty Kotek"),
+                h("p", null,
+                  "Skacz coraz wyżej po platformach i nie pozwól kotkowi spaść w kosmiczną otchłań."
+                ),
+                h("button", { className: "start-btn", onClick: startGame }, "GRAJ!"),
+                h("p", { className: "tiny" },
+                  "Sterowanie: ← → lub A / D",
+                  h("br"),
+                  "Na telefonie: przyciski na dole"
+                )
+              )
+            )
+          : status === "gameover"
+          ? h("div", { className: "overlay" },
+              h("div", { className: "panel" },
+                h("h1", null, "🙀 MIAU-CH!"),
+                h("p", null,
+                  "Kotek spadł.",
+                  h("br"),
+                  "Wynik: ", h("strong", null, score),
+                  h("br"),
+                  "Rekord: ", h("strong", null, best)
+                ),
+                h("button", { className: "start-btn", onClick: startGame }, "JESZCZE RAZ"),
+                h("p", { className: "tiny" }, "Spacja / Enter też uruchamia ponownie.")
+              )
+            )
+          : null;
+
+      return h(
+        "div",
+        { className: "game-shell" },
+        h(
+          "div",
+          { className: "game-card" },
+
+          h("canvas", { ref: canvasRef }),
+
+          h(
+            "div",
+            { className: "hud" },
+            h("div", { className: "pill" }, "🐟 Punkty: ", score),
+            h("div", { className: "pill" }, "🏆 Rekord: ", best)
+          ),
+
+          h(
+            "div",
+            { className: "mobile-controls" },
+
+            h(
+              "button",
+              {
+                className: "ctrl",
+                "aria-label": "W lewo",
+                onPointerDown: e => {
+                  e.preventDefault();
+                  setPress("left", true);
+                },
+                onPointerUp: () => setPress("left", false),
+                onPointerCancel: () => setPress("left", false),
+                onPointerLeave: () => setPress("left", false)
+              },
+              "◀"
+            ),
+
+            h(
+              "button",
+              {
+                className: "ctrl",
+                "aria-label": "W prawo",
+                onPointerDown: e => {
+                  e.preventDefault();
+                  setPress("right", true);
+                },
+                onPointerUp: () => setPress("right", false),
+                onPointerCancel: () => setPress("right", false),
+                onPointerLeave: () => setPress("right", false)
+              },
+              "▶"
+            )
+          ),
+
+          overlay
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(h(Game));
+  </script>
+</body>
+</html>
